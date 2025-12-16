@@ -579,7 +579,6 @@
 
 
 
-
 # Copyright (c) 2025 devgagan : https://github.com/devgaganin.  
 # Licensed under the GNU General Public License v3.0.  
 # See LICENSE file in the repository root for full license text.
@@ -774,48 +773,43 @@ async def get_uclient(uid):
     return Y
 
 # ==============================================================================
-# OPTIMIZED PROGRESS BAR (6 Seconds Interval)
+# PROGRESS BAR WITH VARIABLE INTERVALS & HEADER
 # ==============================================================================
-async def prog(c, t, C, h, m, st):
+async def prog(c, t, C, h, m, st, ud_type):
     global P
-    
-    # Get current time
     now = time.time()
-    
-    # Calculate percentage
     p = c / t * 100
     
-    # RATE LIMIT LOGIC:
-    # If the message ID is in P (we've updated it before)
-    # AND less than 6 seconds have passed since the last update
-    # AND the process is not yet finished (p < 100)
-    # THEN: Return immediately (Skip update to save API calls)
-    if m in P and (now - P[m]) < 6 and p < 100:
+    # --- INTERVAL LOGIC ---
+    # Downloading: 25 seconds
+    # Uploading: 6 seconds
+    interval = 25 if ud_type == "Downloading" else 6
+
+    # Return if interval hasn't passed (and not finished)
+    if m in P and (now - P[m]) < interval and p < 100:
         return
 
-    # Update the timestamp for this message ID
     P[m] = now
-    
-    # Calculate stats
     c_mb = c / (1024 * 1024)
     t_mb = t / (1024 * 1024)
     bar = '🟢' * int(p / 10) + '🔴' * (10 - int(p / 10))
     speed = c / (now - st) / (1024 * 1024) if now > st else 0
     eta = time.strftime('%M:%S', time.gmtime((t - c) / (speed * 1024 * 1024))) if speed > 0 else '00:00'
     
+    # --- HEADER ICON ---
+    icon = "📥" if ud_type == "Downloading" else "📤"
+    
     try:
         await C.edit_message_text(
             h, m, 
-            f"__**Pyro Handler...**__\n\n{bar}\n\n⚡**__Completed__**: {c_mb:.2f} MB / {t_mb:.2f} MB\n📊 **__Done__**: {p:.2f}%\n🚀 **__Speed__**: {speed:.2f} MB/s\n⏳ **__ETA__**: {eta}\n\n**__Powered by Team SPY__**"
+            f"**{icon} {ud_type}...**\n\n{bar}\n\n⚡**__Completed__**: {c_mb:.2f} MB / {t_mb:.2f} MB\n📊 **__Done__**: {p:.2f}%\n🚀 **__Speed__**: {speed:.2f} MB/s\n⏳ **__ETA__**: {eta}\n\n**__Powered by Team SPY__**"
         )
     except FloodWait as e:
         await asyncio.sleep(e.value)
     except Exception:
-        pass # Ignore other errors to keep download going
+        pass 
     
-    # Cleanup when 100%
-    if p >= 100: 
-        P.pop(m, None)
+    if p >= 100: P.pop(m, None)
 
 async def send_direct(c, m, tcid, ft=None, rtmid=None):
     try:
@@ -842,7 +836,7 @@ async def send_direct(c, m, tcid, ft=None, rtmid=None):
         return False
 
 # ==============================================================================
-# OPTIMIZED PROCESS_MSG (REMOVED SPAMMY EDITS)
+# PROCESS MSG WITH UD_TYPE FLAG
 # ==============================================================================
 async def process_msg(c, u, m, d, lt, uid, i):
     try:
@@ -868,13 +862,12 @@ async def process_msg(c, u, m, d, lt, uid, i):
                 return 'Sent directly.'
             
             st = time.time()
-            # Initial message is required to establish p.id for progress updates
             p = await c.send_message(d, 'Downloading...')
 
             # --- EXTENSION DETECTION ---
             video_extensions = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.3gp', '.ogv'}
-            c_name = f"{time.time()}"
             is_real_video = False
+            c_name = f"{time.time()}"
 
             if m.video:
                 is_real_video = True
@@ -883,7 +876,6 @@ async def process_msg(c, u, m, d, lt, uid, i):
                     c_name = sanitize(f"{time.time()}{ext}")
                 else:
                     c_name = sanitize(f"{time.time()}.mp4")
-
             elif m.document:
                 if m.document.file_name:
                     _, ext = os.path.splitext(m.document.file_name)
@@ -892,19 +884,22 @@ async def process_msg(c, u, m, d, lt, uid, i):
                     c_name = sanitize(f"{time.time()}{ext}")
                 else:
                     c_name = sanitize(f"{time.time()}.bin")
-
             elif m.audio:
                 if m.audio.file_name:
                     _, ext = os.path.splitext(m.audio.file_name)
                     c_name = sanitize(f"{time.time()}{ext}")
                 else:
                     c_name = sanitize(f"{time.time()}.mp3")
-
             elif m.photo:
                 c_name = sanitize(f"{time.time()}.jpg")
     
-            # --- DOWNLOAD ---
-            f = await u.download_media(m, file_name=c_name, progress=prog, progress_args=(c, d, p.id, st))
+            # --- DOWNLOAD (Pass 'Downloading' type) ---
+            f = await u.download_media(
+                m, 
+                file_name=c_name, 
+                progress=prog, 
+                progress_args=(c, d, p.id, st, 'Downloading') # 25s update
+            )
             
             if not f:
                 await c.edit_message_text(d, p.id, 'Failed.')
@@ -916,8 +911,7 @@ async def process_msg(c, u, m, d, lt, uid, i):
                 await c.edit_message_text(d, p.id, 'Failed: 0KB File.')
                 return 'Failed: Disk Full.'
 
-            # REMOVED: await c.edit_message_text(d, p.id, 'Renaming...') <--- DELETED AS REQUESTED
-
+            # RENAME
             if (
                 (m.video and m.video.file_name) or
                 (m.audio and m.audio.file_name) or
@@ -929,17 +923,15 @@ async def process_msg(c, u, m, d, lt, uid, i):
             th = thumbnail(d)
             generated_thumb = None
 
-            # --- CLEANUP FUNCTION ---
             async def cleanup():
                 if os.path.exists(f): os.remove(f)
                 if generated_thumb and os.path.exists(generated_thumb): os.remove(generated_thumb)
                 await c.delete_messages(d, p.id)
 
+            # --- LARGE FILE HANDLING ---
             if fsize > 2 and Y:
                 st = time.time()
-                # REMOVED: await c.edit_message_text(d, p.id, 'File is larger...') <--- REDUCED SPAM
                 await upd_dlg(Y)
-                
                 try:
                     dur, h, w = 0, 0, 0
                     if is_real_video:
@@ -951,9 +943,12 @@ async def process_msg(c, u, m, d, lt, uid, i):
                         except Exception:
                             pass
 
+                    # Uploading args passed here
+                    upload_args = {'progress': prog, 'progress_args': (c, d, p.id, st, 'Uploading')} # 6s update
+
                     if not is_real_video:
                          sent = await Y.send_document(LOG_GROUP, f, thumb=th, caption=ft if m.caption else None,
-                                                    reply_to_message_id=rtmid, progress=prog, progress_args=(c, d, p.id, st))
+                                                    reply_to_message_id=rtmid, **upload_args)
                     else:
                         send_funcs = {'video': Y.send_video, 'video_note': Y.send_video_note, 
                                     'voice': Y.send_voice, 'audio': Y.send_audio, 
@@ -967,15 +962,14 @@ async def process_msg(c, u, m, d, lt, uid, i):
                                                 height=h if mtype == 'video' else None,
                                                 width=w if mtype == 'video' else None,
                                                 caption=ft if m.caption and mtype not in ['video_note', 'voice'] else None, 
-                                                reply_to_message_id=rtmid, progress=prog, progress_args=(c, d, p.id, st))
+                                                reply_to_message_id=rtmid, **upload_args)
                                 break
                         else:
                             sent = await Y.send_document(LOG_GROUP, f, thumb=th, caption=ft if m.caption else None,
-                                                        reply_to_message_id=rtmid, progress=prog, progress_args=(c, d, p.id, st))
+                                                        reply_to_message_id=rtmid, **upload_args)
                     
                     await c.copy_message(d, LOG_GROUP, sent.id)
                 except Exception as e:
-                    # Keep error message so user knows why it failed
                     await c.edit_message_text(d, p.id, f'Error: {str(e)[:30]}')
                     await cleanup()
                     return 'Failed.'
@@ -983,11 +977,12 @@ async def process_msg(c, u, m, d, lt, uid, i):
                 await cleanup()
                 return 'Done (Large file).'
             
-            # REMOVED: await c.edit_message_text(d, p.id, 'Uploading...') <--- DELETED AS REQUESTED
             st = time.time()
-
             try:
                 uploaded = False
+                # Uploading args passed here
+                upload_args = {'progress': prog, 'progress_args': (c, d, p.id, st, 'Uploading')} # 6s update
+
                 if is_real_video and (m.video or (m.document and os.path.splitext(f)[1].lower() in video_extensions)):
                     try:
                         mtd = await get_video_metadata(f)
@@ -997,35 +992,28 @@ async def process_msg(c, u, m, d, lt, uid, i):
                         
                         await c.send_video(tcid, video=f, caption=ft if m.caption else None, 
                                         thumb=th, width=w, height=h, duration=dur, 
-                                        progress=prog, progress_args=(c, d, p.id, st), 
-                                        reply_to_message_id=rtmid)
+                                        reply_to_message_id=rtmid, **upload_args)
                         uploaded = True
                     except Exception:
                         uploaded = False
 
                 if not uploaded:
                     if m.video_note and is_real_video:
-                        await c.send_video_note(tcid, video_note=f, progress=prog, 
-                                            progress_args=(c, d, p.id, st), reply_to_message_id=rtmid)
+                        await c.send_video_note(tcid, video_note=f, reply_to_message_id=rtmid, **upload_args)
                     elif m.voice:
-                        await c.send_voice(tcid, f, progress=prog, progress_args=(c, d, p.id, st), 
-                                        reply_to_message_id=rtmid)
+                        await c.send_voice(tcid, f, reply_to_message_id=rtmid, **upload_args)
                     elif m.sticker:
                         await c.send_sticker(tcid, m.sticker.file_id, reply_to_message_id=rtmid)
                     elif m.audio:
                          await c.send_audio(tcid, audio=f, caption=ft if m.caption else None, 
-                                        thumb=th, progress=prog, progress_args=(c, d, p.id, st), 
-                                        reply_to_message_id=rtmid)
+                                        thumb=th, reply_to_message_id=rtmid, **upload_args)
                     elif m.photo:
                         await c.send_photo(tcid, photo=f, caption=ft if m.caption else None, 
-                                        progress=prog, progress_args=(c, d, p.id, st), 
-                                        reply_to_message_id=rtmid)
+                                        reply_to_message_id=rtmid, **upload_args)
                     else:
                         await c.send_document(tcid, document=f, caption=ft if m.caption else None, 
-                                            progress=prog, progress_args=(c, d, p.id, st), 
-                                            reply_to_message_id=rtmid)
+                                            reply_to_message_id=rtmid, **upload_args)
             except Exception as e:
-                # Keep error message so user knows why it failed
                 await c.edit_message_text(d, p.id, f'Error: {str(e)[:30]}')
                 await cleanup()
                 return 'Failed.'
